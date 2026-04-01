@@ -179,7 +179,7 @@ vat    = result["vat"]
 exp_r  = result["expenses"]
 
 # ── Tabs ───────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["📊 Tax Calculation", "💡 Optimization Tips", "📚 Tax Reference"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Tax Calculation", "📅 Monthly Breakdown", "💡 Optimization Tips", "📚 Tax Reference"])
 
 
 # ══════════════════════════════════════════
@@ -188,14 +188,19 @@ tab1, tab2, tab3 = st.tabs(["📊 Tax Calculation", "💡 Optimization Tips", "�
 with tab1:
 
     # KPI row
-    m1, m2, m3, m4, m5 = st.columns(5)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Gross Revenue", f"₪{annual_revenue:,.0f}")
     m2.metric("Income Tax", f"₪{s['net_income_tax']:,.0f}",
               delta=f"{it['effective_it_rate_pct']:.1f}% effective", delta_color="inverse")
     m3.metric("National Insurance", f"₪{s['total_ni_health']:,.0f}")
-    m4.metric("Net Take-Home", f"₪{s['net_cash_after_taxes']:,.0f}",
+    if vat["status"] == "murshe":
+        m4.metric("VAT payable (net)", f"₪{vat['vat_payable']:,.0f}",
+                  delta="pass-through", help="Collected from clients, remitted to tax authority. Not your cost.")
+    else:
+        m4.metric("VAT", "Osek Patur", help="Exempt — no VAT charged or reclaimed")
+    m5.metric("Net Take-Home", f"₪{s['net_cash_after_taxes']:,.0f}",
               delta=f"{100 - s['effective_total_rate_pct']:.1f}% kept")
-    m5.metric("Total Tax Rate", f"{s['effective_total_rate_pct']:.1f}%", delta_color="inverse")
+    m6.metric("Total Tax Rate", f"{s['effective_total_rate_pct']:.1f}%", delta_color="inverse")
 
     st.divider()
     col_l, col_r = st.columns(2)
@@ -284,15 +289,18 @@ with tab1:
     st.divider()
     st.subheader("Where Does the Money Go?")
 
+    chart_rows = {
+        "Net Take-Home":       (max(0, s["net_cash_after_taxes"]), "#38a169"),
+        "Income Tax":          (s["net_income_tax"],               "#e53e3e"),
+        "National Insurance":  (s["total_ni_health"],              "#dd6b20"),
+        "Business Expenses":   (s["total_expenses_cash_out"],      "#718096"),
+    }
+    if vat["status"] == "murshe":
+        chart_rows["VAT payable (net)"] = (vat["vat_payable"], "#805ad5")
     chart_data = pd.DataFrame({
-        "Category": ["Net Take-Home", "Income Tax", "National Insurance", "Business Expenses"],
-        "Amount": [
-            max(0, s["net_cash_after_taxes"]),
-            s["net_income_tax"],
-            s["total_ni_health"],
-            s["total_expenses_cash_out"],
-        ],
-        "Color": ["#38a169", "#e53e3e", "#dd6b20", "#718096"],
+        "Category": list(chart_rows.keys()),
+        "Amount":   [v[0] for v in chart_rows.values()],
+        "Color":    [v[1] for v in chart_rows.values()],
     })
 
     chart = (
@@ -310,9 +318,107 @@ with tab1:
 
 
 # ══════════════════════════════════════════
-# TAB 2 — Optimizer
+# TAB 2 — Monthly Breakdown
 # ══════════════════════════════════════════
 with tab2:
+    st.subheader("Monthly Breakdown")
+    st.caption("Enter a monthly revenue figure to see how that month's money distributes. Uses annual ×12 for bracket calculations.")
+
+    col_mi, col_minfo = st.columns([1, 2])
+    with col_mi:
+        monthly_rev = st.number_input(
+            "Monthly revenue (₪)",
+            min_value=0, max_value=500_000,
+            value=int(annual_revenue / 12),
+            step=1_000,
+            key="monthly_rev",
+            help="Revenue for a single month (ex-VAT if Osek Murshe). Annualized ×12 for tax bracket calculation."
+        )
+    with col_minfo:
+        projected_annual = monthly_rev * 12
+        st.info(
+            f"Projected annual: **₪{projected_annual:,.0f}** (₪{monthly_rev:,.0f} × 12). "
+            f"Income tax brackets are annual — monthly figures are the annual tax ÷ 12."
+        )
+
+    # Run calculation annualizing the monthly revenue
+    monthly_inputs = {**inputs, "annual_revenue": projected_annual}
+    mr = run_calculation(monthly_inputs)
+    ms = mr["summary"]
+    mit = mr["income_tax"]
+    mni = mr["ni"]
+    mvat = mr["vat"]
+
+    st.divider()
+
+    mm1, mm2, mm3, mm4, mm5 = st.columns(5)
+    mm1.metric("Revenue", f"₪{monthly_rev:,.0f}")
+    mm2.metric("Income Tax", f"₪{ms['net_income_tax']/12:,.0f}",
+               delta=f"{mit['effective_it_rate_pct']:.1f}% rate", delta_color="inverse")
+    mm3.metric("NI + Health", f"₪{ms['total_ni_health']/12:,.0f}")
+    if mvat["status"] == "murshe":
+        mm4.metric("VAT to remit", f"₪{mvat['vat_payable']/12:,.0f}",
+                   help="Avg monthly VAT payable — remitted bi-monthly to tax authority")
+    else:
+        mm4.metric("VAT", "Patur")
+    mm5.metric("Net Take-Home", f"₪{ms['net_cash_after_taxes']/12:,.0f}",
+               delta=f"{100 - ms['effective_total_rate_pct']:.1f}% kept")
+
+    st.divider()
+
+    # Monthly vs annual comparison table
+    monthly_table_rows = [
+        ("Gross Revenue",        monthly_rev,                          projected_annual),
+        ("Business Expenses",    ms["total_expenses_cash_out"] / 12,   ms["total_expenses_cash_out"]),
+        ("Income Tax",           ms["net_income_tax"] / 12,            ms["net_income_tax"]),
+        ("NI + Health",          ms["total_ni_health"] / 12,           ms["total_ni_health"]),
+        ("Net Take-Home",        ms["net_cash_after_taxes"] / 12,      ms["net_cash_after_taxes"]),
+    ]
+    if mvat["status"] == "murshe":
+        monthly_table_rows.insert(3, ("VAT payable (net)", mvat["vat_payable"] / 12, mvat["vat_payable"]))
+
+    st.subheader("Monthly vs Annual")
+    mdf = pd.DataFrame(
+        [{"Category": r, "Monthly (₪)": f"₪{m:,.0f}", "Annual (₪)": f"₪{a:,.0f}"}
+         for r, m, a in monthly_table_rows]
+    )
+    st.dataframe(mdf, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Where Does This Month's Money Go?")
+
+    m_chart_rows = {
+        "Net Take-Home":      (max(0, ms["net_cash_after_taxes"] / 12), "#38a169"),
+        "Income Tax":         (ms["net_income_tax"] / 12,               "#e53e3e"),
+        "NI + Health":        (ms["total_ni_health"] / 12,              "#dd6b20"),
+        "Business Expenses":  (ms["total_expenses_cash_out"] / 12,      "#718096"),
+    }
+    if mvat["status"] == "murshe":
+        m_chart_rows["VAT payable (net)"] = (mvat["vat_payable"] / 12, "#805ad5")
+
+    m_chart_data = pd.DataFrame({
+        "Category": list(m_chart_rows.keys()),
+        "Amount":   [v[0] for v in m_chart_rows.values()],
+        "Color":    [v[1] for v in m_chart_rows.values()],
+    })
+    m_chart = (
+        alt.Chart(m_chart_data)
+        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+        .encode(
+            x=alt.X("Category:N", axis=alt.Axis(labelAngle=0, labelFontSize=13), sort=None),
+            y=alt.Y("Amount:Q", axis=alt.Axis(format=",.0f", title="₪/month")),
+            color=alt.Color("Color:N", scale=None, legend=None),
+            tooltip=["Category", alt.Tooltip("Amount:Q", format=",.0f")],
+        )
+        .properties(height=280)
+    )
+    st.altair_chart(m_chart, use_container_width=True)
+
+
+# ══════════════════════════════════════════
+# TAB 3 — Optimizer
+# ══════════════════════════════════════════
+with tab3:
     recs         = opt_result["recommendations"]
     total_saving = opt_result["total_quantified_saving"]
 
@@ -358,9 +464,9 @@ with tab2:
 
 
 # ══════════════════════════════════════════
-# TAB 3 — Reference
+# TAB 4 — Reference
 # ══════════════════════════════════════════
-with tab3:
+with tab4:
 
     st.subheader("Income Tax Brackets — 2026")
     st.info("⚠️ 2026 change: the 20% bracket was expanded to ₪19,000/month (was ₪16,150 in 2025). Temporary for 2026–2027.")

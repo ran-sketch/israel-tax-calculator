@@ -448,8 +448,8 @@ def run_calculation(inputs: dict) -> dict:
     total_input_vat        = exp_result["total_input_vat_recoverable"]
     total_actual_cash      = exp_result["total_actual_cash"]
 
-    # Step 3: NI base = revenue - it_deductible_expenses (clamped)
-    ni_base = max(0.0, revenue - it_deductible_expenses)
+    # Step 3: NI base = gross revenue (expenses do not reduce NI base)
+    ni_base = revenue
     ni_result = calc_ni(ni_base)
     ni_deductible = ni_result["ni_deductible_52pct"]
 
