@@ -324,8 +324,8 @@ with tab2:
     st.subheader("Monthly Breakdown")
     st.caption("Enter a monthly revenue figure to see how that month's money distributes. Uses annual ×12 for bracket calculations.")
 
-    col_mi, col_minfo = st.columns([1, 2])
-    with col_mi:
+    mc1, mc2, mc3 = st.columns(3)
+    with mc1:
         monthly_rev = st.number_input(
             "Monthly revenue (₪)",
             min_value=0, max_value=500_000,
@@ -334,15 +334,38 @@ with tab2:
             key="monthly_rev",
             help="Revenue for a single month (ex-VAT if Osek Murshe). Annualized ×12 for tax bracket calculation."
         )
-    with col_minfo:
-        projected_annual = monthly_rev * 12
-        st.info(
-            f"Projected annual: **₪{projected_annual:,.0f}** (₪{monthly_rev:,.0f} × 12). "
-            f"Income tax brackets are annual — monthly figures are the annual tax ÷ 12."
+    with mc2:
+        monthly_pension = st.number_input(
+            "Monthly pension deposit (₪)",
+            min_value=0, max_value=50_000,
+            value=int(pension / 12),
+            step=500,
+            key="monthly_pension",
+            help="Monthly pension deposit. Annualized ×12 for tax benefit calculation."
+        )
+    with mc3:
+        monthly_kh = st.number_input(
+            "Monthly Keren Hishtalmut deposit (₪)",
+            min_value=0, max_value=10_000,
+            value=int(kh / 12),
+            step=200,
+            key="monthly_kh",
+            help="Monthly Keren Hishtalmut deposit. Annualized ×12 for tax benefit calculation."
         )
 
-    # Run calculation annualizing the monthly revenue
-    monthly_inputs = {**inputs, "annual_revenue": projected_annual}
+    projected_annual = monthly_rev * 12
+    st.info(
+        f"Annualized: revenue **₪{projected_annual:,.0f}** · pension **₪{monthly_pension*12:,.0f}** · KH **₪{monthly_kh*12:,.0f}**. "
+        f"Tax brackets are annual — monthly figures shown as annual ÷ 12."
+    )
+
+    # Run calculation annualizing all monthly inputs
+    monthly_inputs = {
+        **inputs,
+        "annual_revenue":  projected_annual,
+        "pension_deposit": float(monthly_pension * 12),
+        "kh_deposit":      float(monthly_kh * 12),
+    }
     mr = run_calculation(monthly_inputs)
     ms = mr["summary"]
     mit = mr["income_tax"]
@@ -368,14 +391,16 @@ with tab2:
 
     # Monthly vs annual comparison table
     monthly_table_rows = [
-        ("Gross Revenue",        monthly_rev,                          projected_annual),
-        ("Business Expenses",    ms["total_expenses_cash_out"] / 12,   ms["total_expenses_cash_out"]),
-        ("Income Tax",           ms["net_income_tax"] / 12,            ms["net_income_tax"]),
-        ("NI + Health",          ms["total_ni_health"] / 12,           ms["total_ni_health"]),
-        ("Net Take-Home",        ms["net_cash_after_taxes"] / 12,      ms["net_cash_after_taxes"]),
+        ("Gross Revenue",              monthly_rev,                          projected_annual),
+        ("Business Expenses",          ms["total_expenses_cash_out"] / 12,   ms["total_expenses_cash_out"]),
+        ("Pension deposit",            monthly_pension,                      monthly_pension * 12),
+        ("Keren Hishtalmut deposit",   monthly_kh,                           monthly_kh * 12),
+        ("Income Tax",                 ms["net_income_tax"] / 12,            ms["net_income_tax"]),
+        ("NI + Health",                ms["total_ni_health"] / 12,           ms["total_ni_health"]),
+        ("Net Take-Home",              ms["net_cash_after_taxes"] / 12,      ms["net_cash_after_taxes"]),
     ]
     if mvat["status"] == "murshe":
-        monthly_table_rows.insert(3, ("VAT payable (net)", mvat["vat_payable"] / 12, mvat["vat_payable"]))
+        monthly_table_rows.insert(5, ("VAT payable (net)", mvat["vat_payable"] / 12, mvat["vat_payable"]))
 
     st.subheader("Monthly vs Annual")
     mdf = pd.DataFrame(
@@ -393,6 +418,10 @@ with tab2:
         "NI + Health":        (ms["total_ni_health"] / 12,              "#dd6b20"),
         "Business Expenses":  (ms["total_expenses_cash_out"] / 12,      "#718096"),
     }
+    if monthly_pension > 0:
+        m_chart_rows["Pension"] = (float(monthly_pension), "#3182ce")
+    if monthly_kh > 0:
+        m_chart_rows["Keren Hishtalmut"] = (float(monthly_kh), "#00b5d8")
     if mvat["status"] == "murshe":
         m_chart_rows["VAT payable (net)"] = (mvat["vat_payable"] / 12, "#805ad5")
 
