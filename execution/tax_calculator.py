@@ -477,11 +477,8 @@ def run_calculation(inputs: dict) -> dict:
     total_input_vat        = exp_result["total_input_vat_recoverable"]
     total_actual_cash      = exp_result["total_actual_cash"]
 
-    # Step 3: NI base = net business income (revenue minus IT-deductible expenses).
-    # WHY: Israeli National Insurance Law (Section 345) assesses self-employed NI on
-    # "net income from business" (parnasa netonet) = revenue minus business expenses.
-    # SIMPLIFICATION: we use IT-deductible expense amounts as proxy — the sets overlap
-    # closely. Pension/KH deposits do NOT reduce the NI base (only income tax).
+    # Step 3: Israeli NI Law S.345 — NI assessed on net business income (revenue minus expenses).
+    # IT-deductible expense amounts used as proxy; pension/KH don't reduce NI base.
     ni_base = max(0.0, revenue - it_deductible_expenses)
     ni_result = calc_ni(ni_base)
     ni_deductible = ni_result["ni_deductible_52pct"]
@@ -495,10 +492,8 @@ def run_calculation(inputs: dict) -> dict:
             ),
         })
 
-    # Step 4: Pension benefit
-    # NOTE: eligible_income uses gross revenue as base (standard simplification).
-    # For high-expense businesses this may slightly overstate the max deduction
-    # by at most: it_deductible_expenses × 11%. Flagged below if material.
+    # Step 4: Pension benefit — eligible_income base is gross revenue (slight overstatement
+    # for high-expense businesses; flagged in warnings if material).
     pension_result = calc_pension_benefit(pension_dep, revenue)
     pension_deduction = pension_result["deduction_amount"]
     pension_credit    = pension_result["tax_credit"]
@@ -547,18 +542,6 @@ def run_calculation(inputs: dict) -> dict:
     # spendable_cash_net: true cash left after ALL outflows, including savings deposits.
     # This is what you can actually spend this year.
     spendable_cash_net = economic_net - pension_dep - kh_dep
-
-    if pension_dep > 0 or kh_dep > 0:
-        warnings.append({
-            "code": "TWO_NET_FIGURES",
-            "message": (
-                f"Two 'net' figures are provided. "
-                f"Spendable cash (₪{max(0, spendable_cash_net):,.0f}) subtracts pension "
-                f"(₪{pension_dep:,.0f}) and KH (₪{kh_dep:,.0f}) deposits — actual cash "
-                f"available to spend. Economic net (₪{economic_net:,.0f}) treats those "
-                "deposits as still yours (long-term savings)."
-            ),
-        })
 
     return {
         "tax_year": TAX_YEAR,

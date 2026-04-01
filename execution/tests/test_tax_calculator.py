@@ -55,10 +55,6 @@ def test_case_1_25k_monthly():
     assert s["spendable_cash_net"] < s["net_cash_after_taxes"], \
         "spendable_cash must be less than economic net when savings deposits > 0"
 
-    # Should have a TWO_NET_FIGURES warning
-    codes = [w["code"] for w in r["warnings"]]
-    assert "TWO_NET_FIGURES" in codes, "Expected TWO_NET_FIGURES warning"
-
     print(f"  PASS  rate={s['effective_total_rate_pct']:.1f}%  "
           f"IT=₪{s['net_income_tax']:,.0f}  NI=₪{s['total_ni_health']:,.0f}  "
           f"spendable=₪{s['spendable_cash_net']:,.0f}")
@@ -125,22 +121,20 @@ def test_case_4_high_expenses_sanity():
                    "has_vat_invoice": False}],
         vat="patur",
     )
-    it = r["summary"]
+    s, it = r["summary"], r["income_tax"]
 
     # Taxable income must be positive (deductions can't go negative)
-    assert r["income_tax"]["taxable_income"] > 0, \
-        "Taxable income should be positive (100k net income)"
+    assert it["taxable_income"] > 0, "Taxable income should be positive (100k net income)"
 
-    # IT should be non-negative
-    assert r["summary"]["net_income_tax"] >= 0
+    assert s["net_income_tax"] >= 0
 
-    # Effective total rate should be < 25% (high expense, low net)
-    assert r["summary"]["effective_total_rate_pct"] < 30, \
-        f"Effective rate {r['summary']['effective_total_rate_pct']:.1f}% too high for 100k net"
+    # Effective total rate should be < 30% (high expense, low net)
+    assert s["effective_total_rate_pct"] < 30, \
+        f"Effective rate {s['effective_total_rate_pct']:.1f}% too high for 100k net"
 
-    print(f"  PASS  taxable=₪{r['income_tax']['taxable_income']:,.0f}  "
-          f"IT=₪{r['summary']['net_income_tax']:,.0f}  "
-          f"rate={r['summary']['effective_total_rate_pct']:.1f}%")
+    print(f"  PASS  taxable=₪{it['taxable_income']:,.0f}  "
+          f"IT=₪{s['net_income_tax']:,.0f}  "
+          f"rate={s['effective_total_rate_pct']:.1f}%")
 
 
 # ─────────────────────────────────────────────

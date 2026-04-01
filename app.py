@@ -7,6 +7,20 @@ import altair as alt
 from tax_calculator import run_calculation, EXPENSE_RULES, VALID_CATEGORIES
 from tax_optimizer import generate_recommendations
 
+
+def _spendable_metric(col, summary: dict, divisor: int = 1) -> None:
+    """Render the spendable-cash / net-take-home metric for annual or monthly views."""
+    has_savings = summary["pension_kh_deposits"] > 0
+    col.metric(
+        "Spendable Cash" if has_savings else "Net Take-Home",
+        f"₪{summary['spendable_cash_net'] / divisor:,.0f}",
+        delta=(f"+₪{summary['pension_kh_deposits'] / divisor:,.0f} in savings"
+               if has_savings else f"{100 - summary['effective_total_rate_pct']:.1f}% kept"),
+        help=("Cash after taxes, expenses, AND pension/KH deposits. "
+              f"Economic net (incl. savings): ₪{summary['net_cash_after_taxes'] / divisor:,.0f}"
+              if has_savings else "Spendable cash after taxes and expenses."),
+    )
+
 # ── Page config ────────────────────────────────────────────────
 st.set_page_config(
     page_title="Israel Self-Employed Tax Calculator 2026",
@@ -198,29 +212,15 @@ with tab1:
                   delta="pass-through", help="Collected from clients, remitted to tax authority. Not your cost.")
     else:
         m4.metric("VAT", "Osek Patur", help="Exempt — no VAT charged or reclaimed")
-    # Show spendable cash (true cash after ALL outflows) vs economic net (savings still yours)
-    _has_savings = s["pension_kh_deposits"] > 0
-    m5.metric(
-        "Spendable Cash" if _has_savings else "Net Take-Home",
-        f"₪{s['spendable_cash_net']:,.0f}",
-        delta=(f"+₪{s['pension_kh_deposits']:,.0f} in savings" if _has_savings
-               else f"{100 - s['effective_total_rate_pct']:.1f}% kept"),
-        help=("Cash left after taxes, expenses, AND pension/KH deposits. "
-              f"Economic net (incl. savings): ₪{s['net_cash_after_taxes']:,.0f}"
-              if _has_savings else "Spendable cash after taxes and expenses."),
-    )
+    _spendable_metric(m5, s)
     m6.metric("Total Tax Rate", f"{s['effective_total_rate_pct']:.1f}%", delta_color="inverse")
 
-    # Warnings from engine
-    engine_warnings = result.get("warnings", [])
-    if engine_warnings:
-        for w in engine_warnings:
-            if w["code"] == "TWO_NET_FIGURES":
-                pass  # Already surfaced via metric tooltip
-            elif w["code"] == "NI_FLOORED_TO_MINIMUM":
-                st.warning(w["message"])
-            elif w["code"] == "PENSION_BASE_APPROXIMATION":
-                st.info(f"ℹ️ {w['message']}")
+    # Surface engine warnings (TWO_NET_FIGURES is handled via metric tooltip, not shown here)
+    for w in result.get("warnings", []):
+        if w["code"] == "NI_FLOORED_TO_MINIMUM":
+            st.warning(w["message"])
+        elif w["code"] == "PENSION_BASE_APPROXIMATION":
+            st.info(f"ℹ️ {w['message']}")
 
     st.divider()
     col_l, col_r = st.columns(2)
@@ -406,15 +406,7 @@ with tab2:
                    help="Avg monthly VAT payable — remitted bi-monthly to tax authority")
     else:
         mm4.metric("VAT", "Patur")
-    _m_has_savings = ms["pension_kh_deposits"] > 0
-    mm5.metric(
-        "Spendable Cash" if _m_has_savings else "Net Take-Home",
-        f"₪{ms['spendable_cash_net']/12:,.0f}",
-        delta=(f"+₪{ms['pension_kh_deposits']/12:,.0f} in savings" if _m_has_savings
-               else f"{100 - ms['effective_total_rate_pct']:.1f}% kept"),
-        help=(f"Economic net incl. savings: ₪{ms['net_cash_after_taxes']/12:,.0f}/mo"
-              if _m_has_savings else "After taxes and expenses."),
-    )
+    _spendable_metric(mm5, ms, divisor=12)
 
     st.divider()
 
