@@ -268,8 +268,8 @@ exp_r = result["expenses"]
 # Derived set-aside figures
 set_aside_tax   = s["net_income_tax"] + s["total_ni_health"]
 set_aside_vat   = vat["vat_payable"] if vat["status"] == "murshe" else 0
-set_aside_total = set_aside_tax + set_aside_vat
-set_aside_pct   = (set_aside_total / annual_revenue * 100) if annual_revenue > 0 else 0
+# Percentage is based on taxes only — VAT is not deducted from the revenue figure entered
+set_aside_tax_pct = (set_aside_tax / annual_revenue * 100) if annual_revenue > 0 else 0
 
 
 # ══════════════════════════════════════════
@@ -280,11 +280,13 @@ st.caption("Income tax · National Insurance · VAT · Recognized expenses — 2
 
 
 # ── KPI SUMMARY STRIP ──────────────────────────────────────────
+# VAT is intentionally excluded here: revenue is entered ex-VAT, so VAT was never
+# part of the ₪240K base. Showing it alongside IT and NI implies a deduction it isn't.
 m1, m2, m3, m4, m5, m6 = st.columns(6)
 m1.metric(
     "Gross Revenue",
     f"₪{annual_revenue:,.0f}",
-    help="Annual revenue, ex-VAT"
+    help="Annual revenue, ex-VAT. All figures below flow from this base."
 )
 m2.metric(
     "Income Tax",
@@ -298,49 +300,44 @@ m3.metric(
     f"₪{s['total_ni_health']:,.0f}",
     help="National Insurance + Health Insurance (Bituach Leumi)"
 )
-if vat["status"] == "murshe":
-    m4.metric(
-        "VAT Payable",
-        f"₪{vat['vat_payable']:,.0f}",
-        delta="pass-through",
-        help="Collected from clients, remitted to the tax authority. Not a cost to your business."
-    )
-else:
-    m4.metric(
-        "VAT",
-        "Osek Patur",
-        help="Exempt — no VAT charged or reclaimed"
-    )
+m4.metric(
+    "Total Tax Burden",
+    f"₪{s['net_income_tax'] + s['total_ni_health']:,.0f}",
+    delta=f"{set_aside_tax_pct:.1f}% of revenue",
+    delta_color="inverse",
+    help="Income tax + NI+Health. Both are deducted from your revenue. VAT is separate — it was collected on top and is not included here."
+)
 _spendable_metric(m5, s)
 m6.metric(
-    "Effective Total Rate",
-    f"{s['effective_total_rate_pct']:.1f}%",
-    delta_color="inverse",
-    help="Income tax + NI+Health as a percentage of gross revenue"
+    "Economic Net",
+    f"₪{s['net_cash_after_taxes']:,.0f}",
+    help="Spendable cash plus savings deposits (pension/KH). The complete picture of what you earned."
 )
 
 st.divider()
 
 # ── SET ASIDE CALLOUT ──────────────────────────────────────────
-breakdown_parts = [
-    f"₪{s['net_income_tax']:,.0f} income tax",
-    f"₪{s['total_ni_health']:,.0f} NI+Health",
-]
-if set_aside_vat > 0:
-    breakdown_parts.append(f"₪{set_aside_vat:,.0f} VAT")
+vat_line = (
+    f'<div class="set-aside-sub" style="margin-top:8px; padding-top:8px; border-top:1px solid #f0c06a;">'
+    f'+ ₪{set_aside_vat:,.0f} VAT to remit &nbsp;·&nbsp; '
+    f'collected from clients on top of your revenue, not deducted from it'
+    f'</div>'
+) if set_aside_vat > 0 else ""
 
 st.markdown(f"""
 <div class="set-aside">
-  <div class="set-aside-top">Recommended: set aside each year</div>
+  <div class="set-aside-top">Taxes to set aside each year (from your revenue)</div>
   <div class="set-aside-amount">
-    ₪{set_aside_total:,.0f}
+    ₪{set_aside_tax:,.0f}
     <span style="font-size:1rem; font-weight:500; color:#b45309;">
-      &nbsp;({set_aside_pct:.0f}% of revenue)
+      &nbsp;({set_aside_tax_pct:.0f}% of revenue)
     </span>
   </div>
   <div class="set-aside-sub">
-    ≈ ₪{set_aside_total / 12:,.0f}/month &nbsp;·&nbsp; {' + '.join(breakdown_parts)}
+    ≈ ₪{set_aside_tax / 12:,.0f}/month &nbsp;·&nbsp;
+    ₪{s['net_income_tax']:,.0f} income tax + ₪{s['total_ni_health']:,.0f} NI+Health
   </div>
+  {vat_line}
 </div>
 """, unsafe_allow_html=True)
 
