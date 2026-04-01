@@ -198,9 +198,29 @@ with tab1:
                   delta="pass-through", help="Collected from clients, remitted to tax authority. Not your cost.")
     else:
         m4.metric("VAT", "Osek Patur", help="Exempt — no VAT charged or reclaimed")
-    m5.metric("Net Take-Home", f"₪{s['net_cash_after_taxes']:,.0f}",
-              delta=f"{100 - s['effective_total_rate_pct']:.1f}% kept")
+    # Show spendable cash (true cash after ALL outflows) vs economic net (savings still yours)
+    _has_savings = s["pension_kh_deposits"] > 0
+    m5.metric(
+        "Spendable Cash" if _has_savings else "Net Take-Home",
+        f"₪{s['spendable_cash_net']:,.0f}",
+        delta=(f"+₪{s['pension_kh_deposits']:,.0f} in savings" if _has_savings
+               else f"{100 - s['effective_total_rate_pct']:.1f}% kept"),
+        help=("Cash left after taxes, expenses, AND pension/KH deposits. "
+              f"Economic net (incl. savings): ₪{s['net_cash_after_taxes']:,.0f}"
+              if _has_savings else "Spendable cash after taxes and expenses."),
+    )
     m6.metric("Total Tax Rate", f"{s['effective_total_rate_pct']:.1f}%", delta_color="inverse")
+
+    # Warnings from engine
+    engine_warnings = result.get("warnings", [])
+    if engine_warnings:
+        for w in engine_warnings:
+            if w["code"] == "TWO_NET_FIGURES":
+                pass  # Already surfaced via metric tooltip
+            elif w["code"] == "NI_FLOORED_TO_MINIMUM":
+                st.warning(w["message"])
+            elif w["code"] == "PENSION_BASE_APPROXIMATION":
+                st.info(f"ℹ️ {w['message']}")
 
     st.divider()
     col_l, col_r = st.columns(2)
@@ -290,11 +310,13 @@ with tab1:
     st.subheader("Where Does the Money Go?")
 
     chart_rows = {
-        "Net Take-Home":       (max(0, s["net_cash_after_taxes"]), "#38a169"),
-        "Income Tax":          (s["net_income_tax"],               "#e53e3e"),
-        "National Insurance":  (s["total_ni_health"],              "#dd6b20"),
-        "Business Expenses":   (s["total_expenses_cash_out"],      "#718096"),
+        "Spendable Cash":      (s["spendable_cash_net"],      "#38a169"),
+        "Income Tax":          (s["net_income_tax"],          "#e53e3e"),
+        "National Insurance":  (s["total_ni_health"],         "#dd6b20"),
+        "Business Expenses":   (s["total_expenses_cash_out"], "#718096"),
     }
+    if s["pension_kh_deposits"] > 0:
+        chart_rows["Savings (pension/KH)"] = (s["pension_kh_deposits"], "#3182ce")
     if vat["status"] == "murshe":
         chart_rows["VAT payable (net)"] = (vat["vat_payable"], "#805ad5")
     chart_data = pd.DataFrame({
@@ -384,8 +406,15 @@ with tab2:
                    help="Avg monthly VAT payable — remitted bi-monthly to tax authority")
     else:
         mm4.metric("VAT", "Patur")
-    mm5.metric("Net Take-Home", f"₪{ms['net_cash_after_taxes']/12:,.0f}",
-               delta=f"{100 - ms['effective_total_rate_pct']:.1f}% kept")
+    _m_has_savings = ms["pension_kh_deposits"] > 0
+    mm5.metric(
+        "Spendable Cash" if _m_has_savings else "Net Take-Home",
+        f"₪{ms['spendable_cash_net']/12:,.0f}",
+        delta=(f"+₪{ms['pension_kh_deposits']/12:,.0f} in savings" if _m_has_savings
+               else f"{100 - ms['effective_total_rate_pct']:.1f}% kept"),
+        help=(f"Economic net incl. savings: ₪{ms['net_cash_after_taxes']/12:,.0f}/mo"
+              if _m_has_savings else "After taxes and expenses."),
+    )
 
     st.divider()
 
@@ -397,7 +426,8 @@ with tab2:
         ("Keren Hishtalmut deposit",   monthly_kh,                           monthly_kh * 12),
         ("Income Tax",                 ms["net_income_tax"] / 12,            ms["net_income_tax"]),
         ("NI + Health",                ms["total_ni_health"] / 12,           ms["total_ni_health"]),
-        ("Net Take-Home",              ms["net_cash_after_taxes"] / 12,      ms["net_cash_after_taxes"]),
+        ("Spendable Cash",             ms["spendable_cash_net"] / 12,        ms["spendable_cash_net"]),
+        ("  + Savings (economic net)", ms["net_cash_after_taxes"] / 12,      ms["net_cash_after_taxes"]),
     ]
     if mvat["status"] == "murshe":
         monthly_table_rows.insert(5, ("VAT payable (net)", mvat["vat_payable"] / 12, mvat["vat_payable"]))
@@ -413,10 +443,10 @@ with tab2:
     st.subheader("Where Does This Month's Money Go?")
 
     m_chart_rows = {
-        "Net Take-Home":      (max(0, ms["net_cash_after_taxes"] / 12), "#38a169"),
-        "Income Tax":         (ms["net_income_tax"] / 12,               "#e53e3e"),
-        "NI + Health":        (ms["total_ni_health"] / 12,              "#dd6b20"),
-        "Business Expenses":  (ms["total_expenses_cash_out"] / 12,      "#718096"),
+        "Spendable Cash":     (ms["spendable_cash_net"] / 12,        "#38a169"),
+        "Income Tax":         (ms["net_income_tax"] / 12,            "#e53e3e"),
+        "NI + Health":        (ms["total_ni_health"] / 12,           "#dd6b20"),
+        "Business Expenses":  (ms["total_expenses_cash_out"] / 12,   "#718096"),
     }
     if monthly_pension > 0:
         m_chart_rows["Pension"] = (float(monthly_pension), "#3182ce")

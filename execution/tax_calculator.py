@@ -56,24 +56,47 @@ NI_TIER2_NI_RATE     = 0.1283
 NI_TIER2_HEALTH_RATE = 0.0517
 NI_TIER2_TOTAL       = NI_TIER2_NI_RATE + NI_TIER2_HEALTH_RATE  # 0.18
 
-# 52% of total NI+health is deductible for income tax
+# 52% of total NI+health is deductible for income tax (Section 47, Income Tax Ordinance)
 NI_DEDUCTIBLE_FRACTION = 0.52
 
 # VAT
 VAT_RATE = 0.18
-OSEK_PATUR_CEILING = 122_833.0      # annual revenue threshold
+OSEK_PATUR_CEILING = 122_833.0      # annual revenue threshold — verify annually with ITA
 
 # Pension (self-employed)
-PENSION_INCOME_CEILING = 232_800.0
+PENSION_INCOME_CEILING = 232_800.0  # verify for 2026 — adjusted annually
 PENSION_DEDUCTION_RATE = 0.11       # 11% of eligible income is deductible
 PENSION_CREDIT_RATE    = 0.055      # 5.5% → 35% credit
 PENSION_CREDIT_TAX_RATE = 0.35
 
 # Keren Hishtalmut (self-employed)
-KH_DEDUCTION_CEILING      = 13_203.0    # max annual IT deduction
+KH_DEDUCTION_CEILING      = 13_203.0    # max annual IT deduction — verify for 2026
 KH_DEDUCTION_RATE         = 0.045       # 4.5% of income
 KH_INCOME_CEILING_FOR_DED = KH_DEDUCTION_CEILING / KH_DEDUCTION_RATE  # 293,400
 KH_CGT_EXEMPT_CEILING     = 20_566.0    # max annual deposit qualifying for CGT exemption
+
+# ─────────────────────────────────────────────
+# ENGINE AUDIT — what is deterministic vs estimated
+# ─────────────────────────────────────────────
+# DETERMINISTIC (exact per current constants):
+#   income tax progressive brackets, credit point reduction,
+#   VAT pass-through, KH cap logic, expense partial-deduction rules
+#
+# SIMPLIFIED APPROXIMATION (labeled in assumptions output):
+#   NI base: uses revenue minus IT-deductible expenses as proxy for
+#            "net business income" per NI law — close but not exact
+#   Pension/KH eligible income: uses gross revenue; may overstate by ~expenses*rate
+#            for high-expense businesses (usually bounded by ceiling anyway)
+#
+# CONDITIONAL ON MISSING PROFILE DATA (not implemented, flagged):
+#   Exact pension benefit if other income sources exist
+#   NI exemptions (disability, age, maternity)
+#   Municipal tax (arnona) exact deduction if multiple business uses
+#   Partnership / multiple businesses
+#
+# CONSTANTS TO VERIFY ANNUALLY WITH OFFICIAL ITA:
+#   CREDIT_POINT_MONTHLY, NI thresholds, OSEK_PATUR_CEILING,
+#   PENSION_INCOME_CEILING, KH_DEDUCTION_CEILING
 
 # ─────────────────────────────────────────────
 # EXPENSE RULES
@@ -430,6 +453,10 @@ def run_calculation(inputs: dict) -> dict:
         kh_deposit              float (default 0)
         vat_status_override     str (auto|patur|murshe, default auto)
         home_office_ratio       float (default 0.25)
+
+    Returns two net figures in summary:
+        net_cash_after_taxes  — economic net (pension/KH deposits still counted as yours)
+        spendable_cash_net    — true spendable cash (all outflows including savings deposits)
     """
     revenue         = float(inputs.get("annual_revenue", 0))
     expenses        = inputs.get("expenses", [])
@@ -438,6 +465,8 @@ def run_calculation(inputs: dict) -> dict:
     kh_dep          = float(inputs.get("kh_deposit", 0))
     vat_override    = inputs.get("vat_status_override", "auto")
     home_ratio      = float(inputs.get("home_office_ratio", 0.25))
+
+    warnings = []
 
     # Step 1: VAT status
     vat_status = determine_vat_status(revenue, vat_override)
@@ -448,21 +477,51 @@ def run_calculation(inputs: dict) -> dict:
     total_input_vat        = exp_result["total_input_vat_recoverable"]
     total_actual_cash      = exp_result["total_actual_cash"]
 
-    # Step 3: NI base = gross revenue (expenses do not reduce NI base)
-    ni_base = revenue
+    # Step 3: NI base = net business income (revenue minus IT-deductible expenses).
+    # WHY: Israeli National Insurance Law (Section 345) assesses self-employed NI on
+    # "net income from business" (parnasa netonet) = revenue minus business expenses.
+    # SIMPLIFICATION: we use IT-deductible expense amounts as proxy — the sets overlap
+    # closely. Pension/KH deposits do NOT reduce the NI base (only income tax).
+    ni_base = max(0.0, revenue - it_deductible_expenses)
     ni_result = calc_ni(ni_base)
     ni_deductible = ni_result["ni_deductible_52pct"]
 
+    if ni_result["floored_to_minimum"]:
+        warnings.append({
+            "code": "NI_FLOORED_TO_MINIMUM",
+            "message": (
+                f"Income is below NI minimum base (₪{NI_MIN_ANNUAL:,.0f}/yr). "
+                "NI is charged on the minimum floor regardless."
+            ),
+        })
+
     # Step 4: Pension benefit
+    # NOTE: eligible_income uses gross revenue as base (standard simplification).
+    # For high-expense businesses this may slightly overstate the max deduction
+    # by at most: it_deductible_expenses × 11%. Flagged below if material.
     pension_result = calc_pension_benefit(pension_dep, revenue)
     pension_deduction = pension_result["deduction_amount"]
     pension_credit    = pension_result["tax_credit"]
+
+    if it_deductible_expenses > 0 and pension_dep > 0:
+        overstate_risk = it_deductible_expenses * PENSION_DEDUCTION_RATE
+        if overstate_risk > 500:
+            warnings.append({
+                "code": "PENSION_BASE_APPROXIMATION",
+                "message": (
+                    f"Pension max-deduction ceiling uses gross revenue. "
+                    f"With ₪{it_deductible_expenses:,.0f} in deductible expenses, "
+                    f"the ceiling may be overstated by up to ₪{overstate_risk:,.0f}. "
+                    "Consult your accountant for exact pension base."
+                ),
+            })
 
     # Step 5: Keren Hishtalmut benefit
     kh_result = calc_kh_benefit(kh_dep, revenue)
     kh_deduction = kh_result["it_deduction"]
 
     # Step 6: Taxable income for IT
+    # Order: revenue → expenses → pension deduction → KH deduction → 52% NI deduction
     taxable_income = max(0.0, revenue
                          - it_deductible_expenses
                          - pension_deduction
@@ -477,12 +536,29 @@ def run_calculation(inputs: dict) -> dict:
     # Step 8: VAT
     vat_result = calc_vat(revenue, total_input_vat, vat_status)
 
-    # Step 9: Summary
+    # Step 9: Summary — two net figures
     total_tax_burden = net_income_tax + ni_result["total_ni_health"]
     effective_rate   = (total_tax_burden / revenue * 100) if revenue > 0 else 0.0
-    # Net cash = revenue received − cash spent on expenses − income tax − NI
-    # VAT is a pass-through: collected from clients, remitted to state — not a "cost"
-    net_cash_after_taxes = revenue - total_actual_cash - net_income_tax - ni_result["total_ni_health"]
+
+    # economic_net: revenue minus expenses, taxes, NI — does NOT subtract pension/KH
+    # because those deposits remain the taxpayer's assets (savings accounts).
+    economic_net = revenue - total_actual_cash - net_income_tax - ni_result["total_ni_health"]
+
+    # spendable_cash_net: true cash left after ALL outflows, including savings deposits.
+    # This is what you can actually spend this year.
+    spendable_cash_net = economic_net - pension_dep - kh_dep
+
+    if pension_dep > 0 or kh_dep > 0:
+        warnings.append({
+            "code": "TWO_NET_FIGURES",
+            "message": (
+                f"Two 'net' figures are provided. "
+                f"Spendable cash (₪{max(0, spendable_cash_net):,.0f}) subtracts pension "
+                f"(₪{pension_dep:,.0f}) and KH (₪{kh_dep:,.0f}) deposits — actual cash "
+                f"available to spend. Economic net (₪{economic_net:,.0f}) treats those "
+                "deposits as still yours (long-term savings)."
+            ),
+        })
 
     return {
         "tax_year": TAX_YEAR,
@@ -519,9 +595,31 @@ def run_calculation(inputs: dict) -> dict:
             "total_ni_health": round(ni_result["total_ni_health"], 2),
             "total_tax_burden_excl_vat": round(total_tax_burden, 2),
             "effective_total_rate_pct": round(effective_rate, 2),
-            "net_cash_after_taxes": round(net_cash_after_taxes, 2),
+            # economic_net: includes pension/KH as yours (they're savings, not expenses)
+            "net_cash_after_taxes": round(economic_net, 2),
+            # spendable_cash_net: actual cash left after every outflow this year
+            "spendable_cash_net": round(max(0.0, spendable_cash_net), 2),
+            "pension_kh_deposits": round(pension_dep + kh_dep, 2),
             "vat_payable_passthrough": round(vat_result["vat_payable"], 2),
         },
+        "assumptions": {
+            "ni_mode": "net_income_simplified",
+            "ni_base_note": (
+                "NI assessed on revenue minus IT-deductible expenses "
+                "(proxy for Israeli NI law 'net business income')"
+            ),
+            "pension_base": "gross_revenue_approximation",
+            "pension_base_note": (
+                "Pension/KH ceilings use gross revenue; "
+                "may overstate slightly for high-expense businesses"
+            ),
+            "credit_point_annual": CREDIT_POINT_ANNUAL,
+            "credit_point_note": "Verify CREDIT_POINT_MONTHLY (242) against official 2026 ITA table",
+            "revenue_mode": "annual",
+            "vat_mode": vat_status,
+            "constants_source": "2026 — verify NI thresholds, OSEK_PATUR_CEILING annually",
+        },
+        "warnings": warnings,
     }
 
 
